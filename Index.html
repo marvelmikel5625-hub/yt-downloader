@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>YouTube Downloader</title>
+<style>
+  *{box-sizing:border-box} body{font-family:system-ui,-apple-system,sans-serif;max-width:640px;margin:40px auto;padding:0 16px;color:#111}
+  h1{font-size:22px;margin:0 0 16px}
+  .row{display:flex;gap:8px}
+  input,button,select{font-size:16px;padding:10px;border-radius:8px;border:1px solid #ccc}
+  input{flex:1}
+  button{background:#111;color:#fff;border:none;cursor:pointer}
+  button:disabled{opacity:.5;cursor:default}
+  .card{border:1px solid #e5e5e5;border-radius:12px;padding:16px;margin-top:20px}
+  .card img{width:100%;border-radius:8px;margin-bottom:12px}
+  .card h3{margin:0 0 12px;font-size:16px}
+  .bar{height:12px;background:#eee;border-radius:6px;overflow:hidden;margin-top:12px}
+  .bar>div{height:100%;background:#22c55e;width:0;transition:width .3s}
+  .err{color:#dc2626;margin-top:12px}
+  a.dl{display:inline-block;margin-top:12px;padding:10px 16px;background:#22c55e;color:#fff;border-radius:8px;text-decoration:none}
+  .muted{color:#666;font-size:13px;margin-top:20px}
+</style>
+</head>
+<body>
+<h1>Paste a YouTube link</h1>
+<div class="row">
+  <input id="url" placeholder="https://youtu.be/..." autocomplete="off">
+  <button id="go" onclick="loadInfo()">Fetch</button>
+</div>
+<div id="out"></div>
+<p class="muted">Personal use only. Runs locally via a small yt-dlp backend.</p>
+
+<script>
+const $ = id => document.getElementById(id);
+let currentUrl = '';
+
+async function loadInfo() {
+  const url = $('url').value.trim();
+  if (!url) return;
+  currentUrl = url;
+  $('go').disabled = true;
+  $('out').innerHTML = '<p class="muted">Fetching…</p>';
+  try {
+    const r = await fetch('/api/info', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({url})
+    });
+    const d = await r.json();
+    if (d.error) throw new Error(d.error);
+    const opts = d.formats.map(f =>
+      `<option value="${f.id}+bestaudio">${f.label} (${f.ext})</option>`).join('');
+    $('out').innerHTML = `
+      <div class="card">
+        ${d.thumbnail ? `<img src="${d.thumbnail}" alt="">` : ''}
+        <h3>${escapeHtml(d.title)}</h3>
+        <div class="row">
+          <select id="fmt">${opts}<option value="bestaudio">Audio only</option></select>
+          <button onclick="startDownload()">Download</button>
+        </div>
+        <div id="prog"></div>
+      </div>`;
+  } catch (e) {
+    $('out').innerHTML = `<p class="err">${escapeHtml(e.message)}</p>`;
+  } finally {
+    $('go').disabled = false;
+  }
+}
+
+async function startDownload() {
+  const format_id = $('fmt').value;
+  const r = await fetch('/api/download', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({url: currentUrl, format_id})
+  });
+  const d = await r.json();
+  if (d.error) { $('prog').innerHTML = `<p class="err">${escapeHtml(d.error)}</p>`; return; }
+
+  $('prog').innerHTML = `<div class="bar"><div id="bar"></div></div><p id="pct" class="muted">0%</p>`;
+  const timer = setInterval(async () => {
+    const s = await (await fetch('/api/progress/' + d.job_id)).json();
+    $('pct').textContent = s.progress + '%';
+    $('bar').style.width = s.progress + '%';
+    if (s.status === 'ready') {
+      clearInterval(timer);
+      $('prog').innerHTML += `<a class="dl" href="/api/file/${d.job_id}">💾 Save file</a>`;
+    } else if (s.status === 'error') {
+      clearInterval(timer);
+      $('prog').innerHTML = `<p class="err">${escapeHtml(s.error)}</p>`;
+    }
+  }, 800);
+}
+
+function escapeHtml(s){return String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
+$('url').addEventListener('keydown', e => { if (e.key === 'Enter') loadInfo(); });
+</script>
+</body>
+</html>
